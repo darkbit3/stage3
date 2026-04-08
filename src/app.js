@@ -169,6 +169,13 @@ const performHealthCheck = async () => {
 app.use(helmet());
 app.use(compression());
 app.use(cors());
+app.options('*', cors());
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin,X-Requested-With,Content-Type,Accept,Authorization,x-api-key');
+  next();
+});
 
 // Rate limiting
 const limiter = rateLimit({
