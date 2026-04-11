@@ -669,6 +669,61 @@ app.get(`${apiPrefix}/game/latest-data`, async (req, res) => {
   }
 });
 
+// Helper function to parse selectedBoard format
+function parseSelectedBoard(selectedBoard) {
+  try {
+    if (!selectedBoard || typeof selectedBoard !== 'string') {
+      return {
+        playerIds: '',
+        boards: '',
+        totalPlayers: 0
+      };
+    }
+    
+    console.log('🔍 Parsing selectedBoard:', selectedBoard);
+    
+    // Split by comma to get individual player:board pairs
+    const pairs = selectedBoard.split(',');
+    
+    const playerIds = [];
+    const boards = [];
+    
+    pairs.forEach(pair => {
+      if (pair && pair.includes(':')) {
+        const parts = pair.split(':');
+        if (parts.length >= 2) {
+          // Player ID is the first part, board number is the last part
+          const playerId = parts[0].trim();
+          const boardNum = parts[parts.length - 1].trim();
+          
+          if (playerId && boardNum) {
+            playerIds.push(playerId);
+            boards.push(boardNum);
+            console.log(`✅ Parsed: ${playerId} → Board ${boardNum}`);
+          }
+        }
+      }
+    });
+    
+    const result = {
+      playerIds: playerIds.join(','),
+      boards: boards.join(','),
+      totalPlayers: playerIds.length
+    };
+    
+    console.log('✅ Parse result:', result);
+    return result;
+    
+  } catch (error) {
+    console.error('Error parsing selectedBoard:', error);
+    return {
+      playerIds: '',
+      boards: '',
+      totalPlayers: 0
+    };
+  }
+}
+
 // Helper function to create a new game when no data exists
 async function createNewGameForStage(stage) {
   try {
