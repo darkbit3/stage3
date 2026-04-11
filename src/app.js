@@ -27,9 +27,14 @@ const logger = winston.createLogger({
 const app = express();
 
 // Service configuration
+const DB_MANAGER_LOCAL_URL = `http://localhost:${process.env.DB_MANAGER_PORT || 3007}`;
+const DB_MANAGER_REMOTE_URL = process.env.DB_MANAGER || 'https://db-manager-1.onrender.com';
+let dbManagerUrl = DB_MANAGER_LOCAL_URL;
+let dbManagerFallbackUsed = false;
+
 const services = {
   bigserver: { url: process.env.BIGSERVER_URL || `http://localhost:${process.env.BIGSERVER_PORT}`, name: 'Big Server', connected: false },
-  db_manager: { url: process.env.DB_MANAGER || `http://localhost:${process.env.DB_MANAGER_PORT}`, name: 'DB Manager', connected: false }
+  db_manager: { url: dbManagerUrl, name: 'DB Manager', connected: false, fallbackUsed: false }
 };
 
 // Socket.IO client for real-time connection to DB Manager
@@ -82,19 +87,36 @@ const checkServiceConnections = async () => {
     }
 
     // Check DB Manager connection
-    try {
-      const dbManagerResult = await checkWithRetry('DB Manager', services.db_manager.url);
-      
+    const tryDbManager = async (url) => {
+      const result = await checkWithRetry('DB Manager', url);
+      dbManagerUrl = url;
+      services.db_manager.url = url;
       services.db_manager.connected = true;
-      console.log('✅ Connected to DB Manager (Port ' + process.env.DB_MANAGER_PORT + ')');
-      console.log('   📊 DB Manager Status:', dbManagerResult.data.status);
-      console.log('   🗄️  Database Status:', dbManagerResult.data.databases?.sqlite?.status || 'Unknown');
-      logger.info(`✅ DB Manager (Port ${process.env.DB_MANAGER_PORT}) is connected`);
-      
+      services.db_manager.fallbackUsed = url !== DB_MANAGER_LOCAL_URL;
+      dbManagerFallbackUsed = services.db_manager.fallbackUsed;
+      return result;
+    };
+
+    try {
+      try {
+        const dbManagerResult = await tryDbManager(DB_MANAGER_LOCAL_URL);
+        console.log('✅ Connected to local DB Manager on port ' + process.env.DB_MANAGER_PORT);
+        console.log('   📊 DB Manager Status:', dbManagerResult.data.status);
+        console.log('   🗄️  Database Status:', dbManagerResult.data.databases?.sqlite?.status || 'Unknown');
+        logger.info(`✅ DB Manager (Port ${process.env.DB_MANAGER_PORT}) is connected`);
+      } catch (localError) {
+        console.warn('⚠️ Local DB Manager failed, switching to remote DB Manager URL:', DB_MANAGER_REMOTE_URL);
+        logger.warn(`⚠️ Local DB Manager connection failed, switching to fallback URL ${DB_MANAGER_REMOTE_URL}`);
+        const dbManagerResult = await tryDbManager(DB_MANAGER_REMOTE_URL);
+        console.log('✅ Connected to DB Manager via remote fallback');
+        console.log('   📊 DB Manager Status:', dbManagerResult.data.status);
+        console.log('   🗄️  Database Status:', dbManagerResult.data.databases?.sqlite?.status || 'Unknown');
+        logger.info(`✅ DB Manager connected via remote fallback URL ${DB_MANAGER_REMOTE_URL}`);
+      }
     } catch (error) {
       services.db_manager.connected = false;
-      console.log('❌ Failed to connect to DB Manager (Port ' + process.env.DB_MANAGER_PORT + '):', error.message);
-      logger.warn(`❌ DB Manager (Port ${process.env.DB_MANAGER_PORT}) connection error: ${error.message}`);
+      console.log('❌ Failed to connect to DB Manager:', error.message);
+      logger.warn(`❌ DB Manager connection error: ${error.message}`);
     }
     
     // Enhanced connection summary
@@ -121,7 +143,7 @@ const initializeSocketConnection = () => {
   console.log('🔌 Connecting to DB Manager via Socket.IO...');
   logger.info('🔌 Connecting to DB Manager via Socket.IO...');
 
-  dbManagerSocket = io(services.db_manager.url, {
+  dbManagerSocket = io(dbManagerUrl, {
     transports: ['websocket', 'polling'],
     timeout: 5000,
     reconnection: true,
@@ -169,6 +191,16 @@ const initializeSocketConnection = () => {
     console.log('❌ Socket.IO connection error:', error.message);
     logger.warn('❌ Socket.IO connection error:', error.message);
     socketConnected = false;
+
+    if (!dbManagerFallbackUsed && dbManagerUrl === DB_MANAGER_LOCAL_URL) {
+      console.warn('⚠️ Local WebSocket fail, switching to remote DB Manager URL and retrying...');
+      dbManagerUrl = DB_MANAGER_REMOTE_URL;
+      services.db_manager.url = DB_MANAGER_REMOTE_URL;
+      dbManagerFallbackUsed = true;
+      services.db_manager.fallbackUsed = true;
+      dbManagerSocket.disconnect();
+      initializeSocketConnection();
+    }
   });
 
   dbManagerSocket.on('disconnect', (reason) => {
@@ -185,15 +217,39 @@ const initializeSocketConnection = () => {
 };
 
 // Request real-time game data
-const requestRealtimeGameData = (stage = 'e') => {
+const requestRealtimeGameData = async (stage = 'e') => {
   if (dbManagerSocket && socketConnected) {
     console.log(`📊 Requesting real-time game data for Stage ${stage.toUpperCase()}`);
     logger.info(`📊 Requesting real-time game data for Stage ${stage.toUpperCase()}`);
     dbManagerSocket.emit('request-game-data', { stage });
-  } else {
-    console.log('⚠️ Socket not connected, cannot request real-time data');
-    logger.warn('⚠️ Socket not connected, cannot request real-time data');
+    return;
   }
+
+  if (services.db_manager.connected) {
+    try {
+      console.warn('⚠️ Socket not connected, using HTTP fallback for real-time game data');
+      const response = await axios.get(`${services.db_manager.url}/api/v1/stage-${stage}/last-game-id`, {
+        timeout: 10000
+      });
+
+      if (response.data && response.data.success) {
+        console.log(`✅ HTTP fallback game data received for Stage ${stage.toUpperCase()}`);
+        io.emit('game-data-update', {
+          stage: stage.toUpperCase(),
+          data: response.data.data,
+          timestamp: new Date().toISOString(),
+          source: 'db_manager_http_fallback'
+        });
+      } else {
+        console.warn('⚠️ HTTP fallback game data request returned invalid response');
+      }
+    } catch (error) {
+      console.error('❌ HTTP fallback failed for real-time game data:', error.message);
+    }
+    return;
+  }
+
+  console.log('⚠️ No DB Manager connection available for real-time game data');
 };
 
 // Send bet placement notification
