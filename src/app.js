@@ -682,8 +682,8 @@ async function createNewGameForStage(stage) {
     return {
       gameId: gameId,
       payout: 0,
-      players: [],
-      boards: [],
+      players: '',
+      boards: '',
       totalPlayers: 0,
       stage: stage.toUpperCase(),
       timestamp: new Date().toISOString(),
