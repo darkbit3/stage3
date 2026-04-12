@@ -37,6 +37,15 @@ const services = {
   db_manager: { url: dbManagerUrl, name: 'DB Manager', connected: false, fallbackUsed: false }
 };
 
+const {
+  getRoomCountdown,
+  resetRoomCountdown,
+  decrementCountdowns,
+  setRoomCountdown,
+  getAllCountdowns,
+  DEFAULT_COUNTDOWN_SECONDS
+} = require('./countdownManager');
+
 // Socket.IO client for real-time connection to DB Manager
 let dbManagerSocket = null;
 let socketConnected = false;
@@ -870,6 +879,38 @@ app.get('/api/v1/realtime/game-data/:stage?', (req, res) => {
   });
 });
 
+// Room countdown endpoint
+app.get('/api/v1/room-countdown', (req, res) => {
+  try {
+    const room = req.query.room;
+    
+    if (!room || (room !== '1' && room !== '2')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid room parameter. Must be 1 or 2'
+      });
+    }
+
+    const countdownData = getRoomCountdown(room);
+    
+    res.json({
+      success: true,
+      data: {
+        room: parseInt(room),
+        countdown: countdownData.seconds,
+        active: countdownData.active
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error fetching room countdown:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   logger.error(err.stack);
@@ -901,6 +942,11 @@ app.listen(PORT, async () => {
   setInterval(() => {
     requestRealtimeGameData('g'); // Stage 3 defaults to stage G
   }, 10000);
+
+  // Decrement countdowns every second
+  setInterval(() => {
+    decrementCountdowns();
+  }, 1000);
 });
 
 module.exports = app;
